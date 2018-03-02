@@ -77,8 +77,8 @@
 - (void)show:(CDVInvokedUrlCommand*)command;
 - (void)show:(CDVInvokedUrlCommand*)command withAnimation:(BOOL)animated;
 - (void)reload:(CDVInvokedUrlCommand*)command;
+
 - (void)updateMenu:(CDVInvokedUrlCommand*)command;
-- (void)popShareStoryView:(CDVInvokedUrlCommand*)command;
 - (void)switchViewController:(CDVInvokedUrlCommand*)command;
 
 @end
@@ -109,7 +109,6 @@
 @property (nonatomic, strong) IBOutlet UIView* toolbar;
 
 @property (nonatomic, strong) CDVThemeableBrowserOptions *browserOptions;
-
 
 @property (nonatomic, strong) NSArray* leftButtons;
 @property (nonatomic, strong) NSArray* rightButtons;
