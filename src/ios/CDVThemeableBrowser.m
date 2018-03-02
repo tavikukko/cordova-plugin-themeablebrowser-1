@@ -449,6 +449,14 @@
     });
 }
 
+- (void)hide:(CDVInvokedUrlCommand*)command
+{
+    if (self.themeableBrowserViewController != nil) {
+        [[self.themeableBrowserViewController presentingViewController] dismissViewControllerAnimated:YES completion:nil];
+        _isShown = NO;
+    }
+}
+
 - (void)openInCordovaWebView:(NSURL*)url withOptions:(NSString*)options
 {
     NSURLRequest* request = [NSURLRequest requestWithURL:url];
@@ -1290,6 +1298,68 @@
     UIButton* button = sender;
     NSInteger index = button.tag;
     [self emitEventForButton:_browserOptions.customButtons[index] withIndex:[NSNumber numberWithLong:index]];
+}
+
+- (void)goMenu:(id)sender
+{
+    [self emitEventForButton:_browserOptions.menu];
+    
+    if (_browserOptions.menu && _browserOptions.menu[kThemeableBrowserPropItems]) {
+        NSArray* menuItems = _browserOptions.menu[kThemeableBrowserPropItems];
+        if (IsAtLeastiOSVersion(@"8.0")) {
+            // iOS > 8 implementation using UIAlertController, which is the new way
+            // to do this going forward.
+            UIAlertController *alertController = [UIAlertController
+                                                  alertControllerWithTitle:_browserOptions.menu[kThemeableBrowserPropTitle]
+                                                  message:nil
+                                                  preferredStyle:UIAlertControllerStyleActionSheet];
+            alertController.popoverPresentationController.sourceView
+            = self.menuButton;
+            alertController.popoverPresentationController.sourceRect
+            = self.menuButton.bounds;
+            
+            for (NSInteger i = 0; i < menuItems.count; i++) {
+                NSInteger index = i;
+                NSDictionary *item = menuItems[index];
+                
+                UIAlertAction *a = [UIAlertAction
+                                    actionWithTitle:item[@"label"]
+                                    style:UIAlertActionStyleDefault
+                                    handler:^(UIAlertAction *action) {
+                                        [self menuSelected:index];
+                                    }];
+                [alertController addAction:a];
+            }
+            
+            if (_browserOptions.menu[kThemeableBrowserPropCancel]) {
+                UIAlertAction *cancelAction = [UIAlertAction
+                                               actionWithTitle:_browserOptions.menu[kThemeableBrowserPropCancel]
+                                               style:UIAlertActionStyleCancel
+                                               handler:nil];
+                [alertController addAction:cancelAction];
+            }
+            
+            [self presentViewController:alertController animated:YES completion:nil];
+        } else {
+            // iOS < 8 implementation using UIActionSheet, which is deprecated.
+            UIActionSheet *popup = [[UIActionSheet alloc]
+                                    initWithTitle:_browserOptions.menu[kThemeableBrowserPropTitle]
+                                    delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil otherButtonTitles:nil];
+            
+            for (NSDictionary *item in menuItems) {
+                [popup addButtonWithTitle:item[@"label"]];
+            }
+            if (_browserOptions.menu[kThemeableBrowserPropCancel]) {
+                [popup addButtonWithTitle:_browserOptions.menu[kThemeableBrowserPropCancel]];
+                popup.cancelButtonIndex = menuItems.count;
+            }
+            
+            [popup showFromRect:self.menuButton.frame inView:self.view animated:YES];
+        }
+    } else {
+        [self.navigationDelegate emitWarning:kThemeableBrowserEmitCodeUndefined
+                                 withMessage:@"Menu items undefined. No menu will be shown."];
+    }
 }
 
 - (void)jhCustomMenu:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
