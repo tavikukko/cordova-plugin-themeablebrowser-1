@@ -20,8 +20,6 @@
 #import "CDVThemeableBrowser.h"
 #import <Cordova/CDVPluginResult.h>
 #import <Cordova/CDVUserAgentUtil.h>
-#import "JHCustomMenu.h"
-#import "ShareStoryTipView.h"
 #import "MainViewController.h"
 
 #define    kThemeableBrowserTargetSelf @"_self"
@@ -65,7 +63,8 @@
 
 @interface CDVThemeableBrowser () {
     BOOL _isShown;
-    NSMutableString *_lastpostID;
+   // NSMutableString *_lastpostID;
+    NSInteger _previousStatusBarStyle;
     CDVThemeableBrowserNavigationController *_nav;
 }
 @property (nonatomic, strong) dispatch_source_t timer;
@@ -80,7 +79,8 @@
     _isShown = NO;
     _callbackIdPattern = nil;
     _nav = nil;
-    _lastpostID = nil;
+    _previousStatusBarStyle = -1;
+   // _lastpostID = nil;
 }
 #else
 - (CDVThemeableBrowser*)initWithWebView:(UIWebView*)theWebView
@@ -119,38 +119,6 @@
     if (menuItems) {
         [self.themeableBrowserViewController.browserOptions.menu setObject:menuItems forKey:kThemeableBrowserPropItems];
     }
-}
-
-- (void)popShareStoryView:(CDVInvokedUrlCommand*)command{
-    NSString *title = [command argumentAtIndex:0];
-    NSString *imgUrl = [command argumentAtIndex:1];
-    ShareStoryTipView *share=[ShareStoryTipView sharedManager];
-    share.titleLbl.text = title;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        
-        // 多线程中下载图像
-        NSData * imageData = [NSData dataWithContentsOfURL:[NSURL URLWithString:imgUrl]];
-        
-        // 回到主线程完成UI设置
-        dispatch_async(dispatch_get_main_queue(), ^{
-            
-            UIImage * image = [UIImage imageWithData:imageData];
-            share.imageView.image = image;
-            
-        });
-        
-    });
-    share.block=^(void){
-        NSLog(@"分享到故事贴群");
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-                                                      messageAsDictionary:@{@"type":@"share-hot-post", @"postId":_lastpostID}];
-        [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
-        
-        [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
-        
-    };
-    UIWindow *window=[[UIApplication sharedApplication].delegate window];
-    [window addSubview:share];
 }
 
 - (void)switchViewController:(CDVInvokedUrlCommand*)command{
@@ -216,7 +184,7 @@
         NSURL* baseUrl = [self.webView.request URL];
 #endif
         NSURL* absoluteUrl = [[NSURL URLWithString:url relativeToURL:baseUrl] absoluteURL];
-        [self recordPostID:absoluteUrl];
+      //  [self recordPostID:absoluteUrl];
         [self setLocalStorageToThemeableBrowser:absoluteUrl];
         
         if ([self isSystemUrl:absoluteUrl]) {
@@ -251,17 +219,6 @@
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     });
     dispatch_resume(_timer);
-}
-
--(void)recordPostID:(NSURL *)url{
-    
-    _lastpostID = [NSMutableString string];
-    
-    if ([[url host]  rangeOfString:@"cdn.tiegushi.com"].location != NSNotFound) {
-        NSArray *array = [url.absoluteString componentsSeparatedByString:@"/"];
-        NSLog(@"lastpostID:%@",[array lastObject]);
-        _lastpostID = [array lastObject];
-    }
 }
 
 -(void)setLocalStorageToThemeableBrowser:(NSURL *)url{
@@ -346,8 +303,7 @@
             NSDictionary *dict = jsonObj;
             for (NSString *key in dict) {
                 if ([obj respondsToSelector:NSSelectorFromString(key)]) {
-                    NSMutableDictionary *mdic = [NSMutableDictionary dictionaryWithDictionary:dict[key]];
-                    [obj setValue:mdic forKey:key];
+                    [obj setValue:dict[key] forKey:key];
                 }
             }
         }
@@ -619,91 +575,23 @@
 }
 
 /**
- * The iframe bridge provided for the ThemeableBrowser is capable of executing any oustanding callback belonging
- * to the ThemeableBrowser plugin. Care has been taken that other callbacks cannot be triggered, and that no
+ * The message handler bridge provided for the InAppBrowser is capable of executing any oustanding callback belonging
+ * to the InAppBrowser plugin. Care has been taken that other callbacks cannot be triggered, and that no
  * other code execution is possible.
- *
- * To trigger the bridge, the iframe (or any other resource) should attempt to load a url of the form:
- *
- * gap-iab://<callbackId>/<arguments>
- *
- * where <callbackId> is the string id of the callback to trigger (something like "ThemeableBrowser0123456789")
- *
- * If present, the path component of the special gap-iab:// url is expected to be a URL-escaped JSON-encoded
- * value to pass to the callback. [NSURL path] should take care of the URL-unescaping, and a JSON_EXCEPTION
- * is returned if the JSON is invalid.
  */
-- (BOOL)webView:(WKWebView*)theWebView shouldStartLoadWithURL:(NSURL *)url
+- (BOOL)webView:(WKWebView*)theWebView decidePolicyForNavigationAction:(NSURLRequest*)request
 {
+    NSURL* url = request.URL;
+    BOOL isTopLevelNavigation = [request.URL isEqual:[request mainDocumentURL]];
     
-    // See if the url uses the 'gap-iab' protocol. If so, the host should be the id of a callback to execute,
-    // and the path, if present, should be a JSON-encoded value to pass to the callback.
-    if ([[url scheme] isEqualToString:@"gap-iab"]) {
-        NSString* scriptCallbackId = [url host];
-        CDVPluginResult* pluginResult = nil;
-        
-        if ([self isValidCallbackId:scriptCallbackId]) {
-            NSString* scriptResult = [url path];
-            NSError* __autoreleasing error = nil;
-            
-            // The message should be a JSON-encoded array of the result of the script which executed.
-            if ((scriptResult != nil) && ([scriptResult length] > 1)) {
-                scriptResult = [scriptResult substringFromIndex:1];
-                NSData* decodedResult = [NSJSONSerialization JSONObjectWithData:[scriptResult dataUsingEncoding:NSUTF8StringEncoding] options:kNilOptions error:&error];
-                if ((error == nil) && [decodedResult isKindOfClass:[NSArray class]]) {
-                    pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:(NSArray*)decodedResult];
-                } else {
-                    pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_JSON_EXCEPTION];
-                }
-            } else {
-                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:@[]];
-            }
-            [self.commandDelegate sendPluginResult:pluginResult callbackId:scriptCallbackId];
-            return NO;
-        }
-    } else if ((self.callbackId != nil)) {
+    //if is an app store link, let the system handle it, otherwise it fails to load it
+    if ([[ url scheme] isEqualToString:@"itms-appss"] || [[ url scheme] isEqualToString:@"itms-apps"]) {
+        [theWebView stopLoading];
+        [self openInSystem:url];
+        return NO;
+    }
+    else if ((self.callbackId != nil) && isTopLevelNavigation) {
         // Send a loadstart event for each top-level navigation (includes redirects).
-        NSString * urlStr = [url absoluteString];
-        
-        if ([urlStr rangeOfString:@"cdn.tiegushi.com"].location != NSNotFound) {
-            NSArray *array = [urlStr componentsSeparatedByString:@"/"];
-            if(array.count>4){
-                NSLog(@"loading url:%@",urlStr);
-                if (array.count==6) {
-                    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-                                                                  messageAsDictionary:@{@"type":@"section-forward", @"index":[array objectAtIndex:5]}];
-                    [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
-                    
-                    [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
-                    
-                    return NO;
-                }
-                NSLog(@"toPost:%@",[array objectAtIndex:4]);
-                if ([_lastpostID isEqualToString:[array lastObject]]) {
-                    return YES;
-                }
-                [self recordPostID:url];
-                CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-                                                              messageAsDictionary:@{@"type":@"toPost", @"postId":[array lastObject]}];
-                [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
-                
-                [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
-            }
-            
-        }
-        if ([urlStr rangeOfString:@"chat.tiegushi.com"].location != NSNotFound) {
-            
-            NSArray *array = [urlStr componentsSeparatedByString:@"/"];
-            
-            NSLog(@"toChatRoom:%@",urlStr);
-            if (array.count>4) {
-                CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-                                                              messageAsDictionary:@{@"type":@"toChatRoom", @"postId":array[4]}];
-                [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
-                
-                [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
-            }
-        }
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
                                                       messageAsDictionary:@{@"type":@"loadstart", @"url":[url absoluteString]}];
         [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
@@ -799,12 +687,6 @@
 @end
 
 #pragma mark CDVThemeableBrowserViewController
-
-@interface CDVThemeableBrowserViewController ()<JHCustomMenuDelegate,WKNavigationDelegate,WKUIDelegate>
-
-@property (nonatomic, strong) JHCustomMenu *customMenu;
-
-@end
 
 @implementation CDVThemeableBrowserViewController
 
@@ -1087,7 +969,7 @@
             altDensity = 1.0;
         }
         NSData* data = [NSData dataWithContentsOfFile:path];
-        result = [UIImage imageWithData:data scale:3.0];
+        result = [UIImage imageWithData:data scale:altDensity];
     }
     
     return result;
@@ -1410,50 +1292,6 @@
     [self emitEventForButton:_browserOptions.customButtons[index] withIndex:[NSNumber numberWithLong:index]];
 }
 
-- (void)goMenu:(UIButton *)sender
-{
-    [self emitEventForButton:_browserOptions.menu];
-    
-    if (_browserOptions.menu && _browserOptions.menu[kThemeableBrowserPropItems]) {
-        NSArray* menuItems = _browserOptions.menu[kThemeableBrowserPropItems];
-        NSMutableArray *textAry = [[NSMutableArray alloc] init];
-        NSMutableArray *imgAry = [[NSMutableArray alloc] init];
-        for (NSDictionary *menuItem  in menuItems) {
-            
-            [textAry addObject:menuItem[@"label"]];
-            [imgAry addObject:menuItem[@"image"]];
-        }
-        __weak __typeof(self) weakSelf = self;
-        if (!self.customMenu) {
-            self.customMenu = [[JHCustomMenu alloc] initWithDataArr:textAry origin:CGPointMake(0, self.toolbar.frame.origin.y+self.toolbar.frame.size.height+1) width:self.view.frame.size.width rowHeight:44];
-            _customMenu.delegate = self;
-            _customMenu.dismiss = ^() {
-                //weakSelf.customMenu = nil;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (weakSelf.customMenu != nil) {
-                        [weakSelf.customMenu removeFromSuperview];
-                        weakSelf.customMenu = nil;
-                    }
-                });
-            };
-            _customMenu.arrImgName = imgAry;
-            [self.view addSubview:_customMenu];
-        } else {
-            [_customMenu dismissWithCompletion:^(JHCustomMenu *object) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (weakSelf.customMenu != nil) {
-                        [weakSelf.customMenu removeFromSuperview];
-                        weakSelf.customMenu = nil;
-                    }
-                });
-            }];
-        }
-    } else {
-        [self.navigationDelegate emitWarning:kThemeableBrowserEmitCodeUndefined
-                                 withMessage:@"Menu items undefined. No menu will be shown."];
-    }
-}
-
 - (void)jhCustomMenu:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
     NSLog(@"select: %ld", indexPath.row);
@@ -1495,21 +1333,49 @@
 }
 
 - (void) rePositionViews {
-    CGFloat toolbarHeight = [self getFloatFromDict:_browserOptions.toolbar withKey:kThemeableBrowserPropHeight withDefault:TOOLBAR_DEF_HEIGHT];
-    CGFloat webviewOffset = _browserOptions.fullscreen ? 0.0 : toolbarHeight;
-    
-    if ([_browserOptions.toolbarposition isEqualToString:kThemeableBrowserToolbarBarPositionTop]) {
-        [self.webView setFrame:CGRectMake(self.webView.frame.origin.x, webviewOffset, self.webView.frame.size.width, self.webView.frame.size.height)];
-        [self.toolbar setFrame:CGRectMake(self.toolbar.frame.origin.x, [self getStatusBarOffset], self.toolbar.frame.size.width, self.toolbar.frame.size.height)];
+    // Webview height is a bug that appear in the plugin for ios >= 11 so we need to keep the previous code that work great for previous versions
+    if (@available(iOS 11, *)) {
+        
+        CGFloat toolbarHeight = [self getFloatFromDict:_browserOptions.toolbar withKey:kThemeableBrowserPropHeight withDefault:TOOLBAR_DEF_HEIGHT];
+        CGFloat statusBarOffset = [self getStatusBarOffset];
+        CGFloat webviewOffset = _browserOptions.fullscreen ? 0.0 : toolbarHeight + statusBarOffset;
+        
+        if ([_browserOptions.toolbarposition isEqualToString:kThemeableBrowserToolbarBarPositionTop]) {
+            // The webview height calculated did not take the status bar into account. Thus we need to remove status bar height to the webview height.
+            [self.webView setFrame:CGRectMake(self.webView.frame.origin.x, webviewOffset, self.webView.frame.size.width, (self.webView.frame.size.height-statusBarOffset))];
+            [self.toolbar setFrame:CGRectMake(self.toolbar.frame.origin.x, [self getStatusBarOffset], self.toolbar.frame.size.width, self.toolbar.frame.size.height)];
+        }
+        // When positionning the iphone to landscape mode, status bar is hidden. The problem is that we set the webview height just before with removing the status bar height. We need to adjust the phenomen by adding the preview status bar height. We had to add manually 20 (pixel) because in landscape mode, the status bar height is equal to 0.
+        if (statusBarOffset == 0) {
+            [self.webView setFrame:CGRectMake(self.webView.frame.origin.x, webviewOffset, self.webView.frame.size.width, (self.webView.frame.size.height+20))];
+        }
+        
+        CGFloat screenWidth = CGRectGetWidth(self.view.frame);
+        NSInteger width = floorf(screenWidth - self.titleOffset * 2.0f);
+        if (self.titleLabel) {
+            self.titleLabel.frame = CGRectMake(floorf((screenWidth - width) / 2.0f), 0, width, toolbarHeight);
+        }
+        
+        [self layoutButtons];
+        
+    } else {
+        
+        CGFloat toolbarHeight = [self getFloatFromDict:_browserOptions.toolbar withKey:kThemeableBrowserPropHeight withDefault:TOOLBAR_DEF_HEIGHT];
+        CGFloat webviewOffset = _browserOptions.fullscreen ? 0.0 : toolbarHeight;
+        
+        if ([_browserOptions.toolbarposition isEqualToString:kThemeableBrowserToolbarBarPositionTop]) {
+            [self.webView setFrame:CGRectMake(self.webView.frame.origin.x, webviewOffset, self.webView.frame.size.width, self.webView.frame.size.height)];
+            [self.toolbar setFrame:CGRectMake(self.toolbar.frame.origin.x, [self getStatusBarOffset], self.toolbar.frame.size.width, self.toolbar.frame.size.height)];
+        }
+        
+        CGFloat screenWidth = CGRectGetWidth(self.view.frame);
+        NSInteger width = floorf(screenWidth - self.titleOffset * 2.0f);
+        if (self.titleLabel) {
+            self.titleLabel.frame = CGRectMake(floorf((screenWidth - width) / 2.0f), 0, width, toolbarHeight);
+        }
+        
+        [self layoutButtons];
     }
-    
-    CGFloat screenWidth = CGRectGetWidth(self.view.frame);
-    NSInteger width = floorf(screenWidth - self.titleOffset * 2.0f);
-    if (self.titleLabel) {
-        self.titleLabel.frame = CGRectMake(floorf((screenWidth - width) / 2.0f), 0, width, toolbarHeight);
-    }
-    
-    [self layoutButtons];
 }
 
 - (CGFloat) getFloatFromDict:(NSDictionary*)dict withKey:(NSString*)key withDefault:(CGFloat)def
@@ -1633,7 +1499,7 @@
 }
 
 // 在收到响应后，决定是否跳转
-- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler{
+/*- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler{
     //NSLog(@"%@", navigationResponse.response);
     
     self.currentURL = navigationResponse.response.URL;
@@ -1645,12 +1511,28 @@
         return decisionHandler(WKNavigationResponsePolicyAllow);
     }
     decisionHandler(WKNavigationResponsePolicyCancel);
+}*/
+- (void)webView:(WKWebView *)theWebView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
+{
+    NSURL *url = navigationAction.request.URL;
+    NSURL *mainDocumentURL = navigationAction.request.mainDocumentURL;
+    
+    BOOL isTopLevelNavigation = [url isEqual:mainDocumentURL];
+    
+    if (isTopLevelNavigation) {
+        self.currentURL = url;
+    }
+    
+    [self.navigationDelegate webView:theWebView decidePolicyForNavigationAction:navigationAction.request];
+    
+    decisionHandler(WKNavigationActionPolicyAllow);
+    
 }
-
+/*
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
 {
     decisionHandler(WKNavigationActionPolicyAllow);
-}
+}*/
 
 -(WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)navigationAction windowFeatures:(WKWindowFeatures *)windowFeatures
 {
